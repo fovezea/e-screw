@@ -28,18 +28,18 @@ const int z = 10;       //Pin for the encoder Index
 U8GLIB_ST7920_128X64_4X u8g(63,62, 4);          // LCD control pins
 
 volatile signed int z_Total=0;               //keeps the total rotation
-volatile signed double accumulatedPulses=0;  // keeps the total pulses
+volatile signed long accumulatedPulses=0;  // keeps the total pulses
 volatile int precision=1000;                  //equals with 1 , 10, 100 etc depending on how many decimals after the comma you want to consider in the division ration calculation 
 volatile int breseham_demult_zecimala=0;    //keeps the zecimal part of the division ratio
 volatile int error_accum=0;                  //used to keep the accumulated error from bresenham 
 volatile int breseham_err=0;                //used to add one count to spindle counter when error_accumulator is bigger then "precision"
-volatile int breseham_demult_int=12;        // keeps the integer part of the division ration
+volatile int breseham_demult_int=12;        // keeps the integer part of the division ratio
 enum State_machine{
                     motor_stop,
                     motor_at_speed,
                     motor_accel,
                     motor_deccel
-                }; //
+                }state_machine; //
 volatile int lost_step=0;
 //volatile boolean motor_at_speed=true;
 //volatile boolean motor_stop=false; 
@@ -48,7 +48,7 @@ volatile int lost_step=0;
 //volatile boolean motor_accel=false;
 volatile boolean output;
 volatile boolean timing_err=false;
-volatile signed double spindlePosition;
+volatile signed long spindlePosition;
 volatile signed long saddlePosition;
 volatile boolean step_on=false;
 volatile boolean step_off=false;
@@ -59,7 +59,6 @@ float e_gear_ratio;
 float gear_ratio=6;     //existing lead screw ratio and /or gears between motor and lead screw (my lathe has 6 on B 6/2 on A si 6/4 on C
 volatile boolean direction;
 volatile boolean motorStart = false;
-
 
 volatile int motor=0;  //just for debugging shows how the pulses for the motor are accumulating
 
@@ -144,13 +143,14 @@ void draw(){
   u8g.drawStr( 0, 20, "E-gearbox");
   u8g.drawStr(0, 35, itoa(spindlePosition, buff, 10)); 
    u8g.drawStr(0, 50, itoa(z_Total, buff, 10));
- u8g.drawStr(80, 50, itoa(TPR, buff, 10));
+ u8g.drawStr(80, 50, itoa(accumulatedPulses, buff, 10));
 }
 
 void setup() {
 
 
-  State_machine state_machine = motor_at_speed;
+  state_machine = motor_at_speed;
+  
   Serial.begin(115200); 
   delay(100);
   
@@ -221,7 +221,7 @@ divider_calculation(3);//request calculation of the e-gear ratio
 void loop() {
   
   //start the saddle
-  motorSart=true;
+  motorStart=true;
   //REG_TC0_CV0 Stores count from encoder
   //(REG_TC0_QISR >> 8) & 0x1; gives 0 or 1 depends of direction
   if ((REG_TC0_QISR >> 8) & 0x1)Serial.println("stinga");
@@ -284,9 +284,9 @@ void TC1_Handler() {
 //TODO need to find out some way to avoid adding encoderPPR  on incomplete rotation (first start) 
 
 if((REG_TC0_QISR >> 8) & 0x1){
- accumulatedPulses+=encoderPPR
+ accumulatedPulses+=encoderPPR;
 }else {
-  accumulatedPulses-=encoderPPR
+  accumulatedPulses-=encoderPPR;
   //accumulatedPulses=REG_TC0_CV2;
 }
 //need to add here cod to start the acceleration in order to be in sinc with the spindle
@@ -295,7 +295,7 @@ if (motorStart){
   //state_machine = motor_accel;
 
   state_machine=motor_at_speed;   //this needs to change when the code is ready to motor_accel;
-motorStart=false
+motorStart=false;
 }
 
 }
@@ -307,13 +307,13 @@ void TC3_Handler()
       volatile long dummy=REG_TC1_SR0;
 
      
-  switch (state_machine)
+  switch (state_machine){
 
   case (motor_stop): break;
 
   case (motor_at_speed):
     //check if we are not during a step already in which case return
-      if (step_on) return;
+      if (step_on) break;
 
         
        //check spindle rotating direction
@@ -324,7 +324,7 @@ void TC3_Handler()
               //need to add code to detect buffer overflow for the encoder register 
               spindlePosition = REG_TC0_CV0;
               //just for test fire the step pin
-              if(accumulatedPulses + spindlePosition > saddlePosition && ){
+              if(accumulatedPulses + spindlePosition > saddlePosition  ){
                 digitalWriteDirect(directionPin, true );  //set the direction pin
                 step_on=true;
                 saddlePosition ++;
@@ -341,11 +341,11 @@ void TC3_Handler()
               STEP; // this fires the single shot timer fore the step 
             }
        }
-
+       break;
        case ( motor_accel):break;  //code to be added
        case (motor_deccel):break;
+  }
 
-}
 
      /*
       switch (state_machine){
