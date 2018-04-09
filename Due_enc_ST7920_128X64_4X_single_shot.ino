@@ -58,6 +58,7 @@ float stepperPPR=200*8;
 float e_gear_ratio;
 float gear_ratio=6;     //existing lead screw ratio and /or gears between motor and lead screw (my lathe has 6 on B 6/2 on A si 6/4 on C
 volatile boolean direction;
+volatile boolean motorStart = false;
 
 
 volatile int motor=0;  //just for debugging shows how the pulses for the motor are accumulating
@@ -219,7 +220,8 @@ divider_calculation(3);//request calculation of the e-gear ratio
 
 void loop() {
   
-
+  //start the saddle
+  motorSart=true;
   //REG_TC0_CV0 Stores count from encoder
   //(REG_TC0_QISR >> 8) & 0x1; gives 0 or 1 depends of direction
   if ((REG_TC0_QISR >> 8) & 0x1)Serial.println("stinga");
@@ -279,10 +281,23 @@ void TC1_Handler() {
   volatile long status = REG_TC0_SR1; // vital - reading this clears some flag
                             // otherwise you get infinite interrupts
 
-if((REG_TC0_QISR >> 8) & 0x1) accumulatedPulses+=encoderPPR;
-                          else accumulatedPulses-=encoderPPR;
-//need to add here cod to start the acceleration in order to me in sinc with the spindle
-//if (motorStart) state_machine = motor_accel;
+//TODO need to find out some way to avoid adding encoderPPR  on incomplete rotation (first start) 
+
+if((REG_TC0_QISR >> 8) & 0x1){
+ accumulatedPulses+=encoderPPR
+}else {
+  accumulatedPulses-=encoderPPR
+  //accumulatedPulses=REG_TC0_CV2;
+}
+//need to add here cod to start the acceleration in order to be in sinc with the spindle
+if (motorStart){ 
+  
+  //state_machine = motor_accel;
+
+  state_machine=motor_at_speed;   //this needs to change when the code is ready to motor_accel;
+motorStart=false
+}
+
 }
 
 //TC1 ch 0
@@ -291,15 +306,15 @@ void TC3_Handler()
       
       volatile long dummy=REG_TC1_SR0;
 
-      //check if we are not during a step already in which case return
-      //not sure if is ok to be right here 
-      if (step_on) return;
-
+     
   switch (state_machine)
 
   case (motor_stop): break;
 
   case (motor_at_speed):
+    //check if we are not during a step already in which case return
+      if (step_on) return;
+
         
        //check spindle rotating direction
        if((REG_TC0_QISR >> 8) & 0x1){   //gives 0 or 1 depending on the direction
