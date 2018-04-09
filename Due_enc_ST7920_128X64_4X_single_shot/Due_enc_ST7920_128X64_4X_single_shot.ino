@@ -21,9 +21,7 @@ const int z = 10;       //Pin for the encoder Index
 
 #define directionPin  12    // controles the direction of rotation and pin 5 controles the steps
 #define STEP TC_Start(TC2, 0)
-//#define SET_DIRECTION digitalWriteDirect(directionPin, (REG_TC0_QISR >> 8) & 0x1))     //set the direction pin according to spindle direction
 
-//(2×(e^32))-1
 
 U8GLIB_ST7920_128X64_4X u8g(63,62, 4);          // LCD control pins
 
@@ -39,7 +37,7 @@ enum State_machine{
                     motor_at_speed,
                     motor_accel,
                     motor_deccel
-                }state_machine; //
+                }state_machine; 
 volatile int lost_step=0;
 //volatile boolean motor_at_speed=true;
 //volatile boolean motor_stop=false; 
@@ -48,17 +46,20 @@ volatile int lost_step=0;
 //volatile boolean motor_accel=false;
 volatile boolean output;
 volatile boolean timing_err=false;
-volatile signed long spindlePosition;
-volatile signed long saddlePosition;
+volatile signed long spindlePosition = 0;
+volatile signed int oldSpindlePosition = 0;
+volatile signed long saddlePosition = 0;
 volatile boolean step_on=false;
 volatile boolean step_off=false;
-volatile long total_spindle;                 //used for debug only
-float encoderPPR = 1800*4;
+volatile long total_spindle;               
+float encoderPPR = 1024*4;
 float stepperPPR=200*8;
 float e_gear_ratio;
 float gear_ratio=6;     //existing lead screw ratio and /or gears between motor and lead screw (my lathe has 6 on B 6/2 on A si 6/4 on C
 volatile boolean direction;
 volatile boolean motorStart = false;
+
+volatile boolean sincStarted = false;  //avoid adding encoderPPR  on incomplete rotation (first start) 
 
 volatile int motor=0;  //just for debugging shows how the pulses for the motor are accumulating
 
@@ -110,7 +111,7 @@ void startTimer_single_shot(Tc *tc, uint32_t channel, IRQn_Type irq, uint32_t fr
 }
 
 //floating point calculation for the divider
-//this function is slow but is calculated only oance 
+//this function is slow but is calculated only once 
 //using a double float, it returns 2 integer values
 
 void divider_calculation( float pitch){
@@ -119,7 +120,7 @@ void divider_calculation( float pitch){
   
   f=(encoderPPR)/(stepperPPR/(gear_ratio/pitch));
   Serial.print("partea cu virgula");Serial.println(f);
-  breseham_demult_int= (int)f; //scoatem partea intreaga
+  breseham_demult_int= (int)f; 
   breseham_demult_zecimala = (int)((f - breseham_demult_int)* precision);
   
 }
@@ -203,7 +204,7 @@ void setup() {
 
 
 //start the timer for the control loop
-startTimer(TC1, 0, TC3_IRQn, 100); //TC1 channel 0, the IRQ for that channel and the desired frequency
+startTimer(TC1, 0, TC3_IRQn, 1000); //TC1 channel 0, the IRQ for that channel and the desired frequency
 //startTimer(TC1, 1, TC4_IRQn, 50000); //TC1 channel 1, the IRQ for that channel and the desired frequency
 //startTimer(TC1, 2, TC5_IRQn, 2); //TC1 channel 0, the IRQ for that channel and the desired frequency
 
@@ -225,10 +226,11 @@ void loop() {
   //REG_TC0_CV0 Stores count from encoder
   //(REG_TC0_QISR >> 8) & 0x1; gives 0 or 1 depends of direction
   if ((REG_TC0_QISR >> 8) & 0x1)Serial.println("stinga");
-  else Serial.println("dreapta");
-  Serial.print("Spindle index = ");Serial.print(spindlePosition);Serial.print(" ");Serial.println(breseham_demult_int);
+  else Serial.print("dreapta");
+  Serial.print("accumulatedPulses= "); Serial.println(accumulatedPulses);
+  Serial.print("Spindle index = ");Serial.println(spindlePosition);//Serial.print(" ");//Serial.println(breseham_demult_int);
   Serial.print("Motor index = ");Serial.println(saddlePosition);
-  Serial.println(error_accum);
+  //Serial.println(accumulatedPulses);
   Serial.print("total_spindle= ");Serial.println(total_spindle);
 /*
 
@@ -264,7 +266,7 @@ void loop() {
     draw();
   } while( u8g.nextPage() );
 
-  delay(500);
+  delay(200);
 
 }
 
@@ -280,23 +282,29 @@ void TC1_Handler() {
 
   volatile long status = REG_TC0_SR1; // vital - reading this clears some flag
                             // otherwise you get infinite interrupts
+                        
 
-//TODO need to find out some way to avoid adding encoderPPR  on incomplete rotation (first start) 
-
+// need  to avoid adding encoderPPR  on incomplete rotation (first start) 
+ if (sincStarted){
 if((REG_TC0_QISR >> 8) & 0x1){
- accumulatedPulses+=encoderPPR;
+ accumulatedPulses-=encoderPPR;
 }else {
-  accumulatedPulses-=encoderPPR;
+  accumulatedPulses+=encoderPPR;
   //accumulatedPulses=REG_TC0_CV2;
 }
 //need to add here cod to start the acceleration in order to be in sinc with the spindle
 if (motorStart){ 
   
-  //state_machine = motor_accel;
+  state_machine = motor_accel;
 
   state_machine=motor_at_speed;   //this needs to change when the code is ready to motor_accel;
 motorStart=false;
 }
+ }else{
+   sincStarted = true; 
+ }
+
+
 
 }
 
@@ -305,26 +313,40 @@ void TC3_Handler()
 {
       
       volatile long dummy=REG_TC1_SR0;
-
      
   switch (state_machine){
 
-  case (motor_stop): break;
+  case (motor_stop): 
+           sincStarted = false;
+           total_spindle = 0;
+           accumulatedPulses = 0;
+           oldSpindlePosition = 0;
+           saddlePosition = 0;
+           spindlePosition = 0;
+           break;
 
   case (motor_at_speed):
     //check if we are not during a step already in which case return
       if (step_on) break;
-
-        
+      if (!sincStarted) break;
+      //store the encoder position 
+        spindlePosition = REG_TC0_CV0;
+        if(accumulatedPulses){
+           total_spindle += (accumulatedPulses - oldSpindlePosition) + spindlePosition;
+           oldSpindlePosition = spindlePosition;
+           accumulatedPulses = 0;
+        }else{
+          total_spindle +=spindlePosition - oldSpindlePosition;
+          oldSpindlePosition = spindlePosition;
+        }
        //check spindle rotating direction
        if((REG_TC0_QISR >> 8) & 0x1){   //gives 0 or 1 depending on the direction
               //if rotation is pozitive
 
               //store the encoder position 
-              //need to add code to detect buffer overflow for the encoder register 
-              spindlePosition = REG_TC0_CV0;
+              //spindlePosition = REG_TC0_CV0;
               //just for test fire the step pin
-              if(accumulatedPulses + spindlePosition > saddlePosition  ){
+              if(total_spindle > saddlePosition  ){
                 digitalWriteDirect(directionPin, true );  //set the direction pin
                 step_on=true;
                 saddlePosition ++;
@@ -334,7 +356,7 @@ void TC3_Handler()
        }else{
             //if rotation is negative
               
-            if(accumulatedPulses + spindlePosition < saddlePosition ){
+            if(total_spindle < saddlePosition ){
               digitalWriteDirect(directionPin, false);
               step_on = true;
               saddlePosition --;

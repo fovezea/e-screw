@@ -1,0 +1,5 @@
+{
+    "board": "arduino:sam:arduino_due_x",
+    "sketch": "Due_enc_ST7920_128X64_4X_single_shot/Due_enc_ST7920_128X64_4X_single_shot.ino",
+    "port": "/dev/ttyACM0"
+}
